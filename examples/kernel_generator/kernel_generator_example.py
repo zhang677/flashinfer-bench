@@ -20,13 +20,13 @@ def main():
     Generate optimized solutions for all definitions in the traceset.
     """
     # TODO: select model, language, target gpu, definition
-    model_name = "gpt-5-2025-08-07"  # Choose author-model
+    model_name = "gemini-3-flash-preview"  # Choose author-model
     language = "triton"  # Target solution language
-    target_gpu = "B200"  # Choose solution target GPU
+    target_gpu = "H100"  # Choose solution target GPU
     target_definition_name = ""  # Leave empty to generate solutions for all definitions
 
     # TODO: adjust local path to traceset
-    traceset_path = "/path/to/flashinfer-trace"
+    traceset_path = "/home/ubuntu/flashinfer-trace"
 
     print(f"Loading TraceSet from: {traceset_path}")
     traceset = TraceSet.from_path(traceset_path)
