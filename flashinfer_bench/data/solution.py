@@ -27,6 +27,8 @@ class SupportedLanguages(str, Enum):
     """CUDA C++ programming language."""
     TILELANG = "tilelang"
     """TileLang GPU programming language."""
+    CUTEDSL = "cutedsl"
+    """CuTeDSL (CUTLASS Cute DSL) GPU programming language."""
 
 
 class SupportedBindings(str, Enum):
