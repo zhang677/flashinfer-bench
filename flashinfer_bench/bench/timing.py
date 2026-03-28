@@ -4,44 +4,22 @@ Timing utilities for benchmarking FlashInfer-Bench kernel solutions.
 
 from __future__ import annotations
 
+import logging
 import statistics
 from multiprocessing import Lock
-from multiprocessing.synchronize import Lock as LockType
 from typing import Any, List
 
 import torch
-from flashinfer.testing import bench_gpu_time_with_cupti
+from flashinfer.testing import bench_gpu_time_with_cuda_event, bench_gpu_time_with_cupti
 
 from flashinfer_bench.compile import Runnable
 
-# Device-specific lock registry to ensure multiprocess-safe benchmarking
-_device_locks: dict[str, LockType] = {}
-_registry_lock = Lock()
+logger = logging.getLogger(__name__)
 
-
-def _device_lock(device: str) -> LockType:
-    """Get or create a multiprocessing lock for the specified device.
-
-    This function maintains a registry of locks per device to ensure that
-    benchmarking operations on the same device are serialized, preventing
-    interference between concurrent measurements.
-
-    Parameters
-    ----------
-    device : str
-        The device identifier (e.g., "cuda:0", "cuda:1").
-
-    Returns
-    -------
-    LockType
-        A lock object specific to the given device.
-    """
-    with _registry_lock:
-        lock = _device_locks.get(device)
-        if lock is None:
-            lock = Lock()
-            _device_locks[device] = lock
-        return lock
+# Global lock to serialize all CUPTI profiling calls.
+# CUPTI does not support concurrent profiling from multiple threads in the
+# same process, so we must serialize across all devices (not just per-device).
+_cupti_lock = Lock()
 
 
 def time_runnable(fn: Runnable, args: List[Any], warmup: int, iters: int, device: str) -> float:
@@ -68,15 +46,24 @@ def time_runnable(fn: Runnable, args: List[Any], warmup: int, iters: int, device
     float
         The median execution time in milliseconds.
     """
-    lock = _device_lock(device)
-    with lock:
+    with _cupti_lock:
         with torch.cuda.device(device):
-            times = bench_gpu_time_with_cupti(
-                fn=fn,
-                dry_run_iters=warmup,
-                repeat_iters=iters,
-                input_args=tuple(args),
-                cold_l2_cache=True,
-                use_cuda_graph=False,
-            )
+            try:
+                times = bench_gpu_time_with_cupti(
+                    fn=fn,
+                    dry_run_iters=warmup,
+                    repeat_iters=iters,
+                    input_args=tuple(args),
+                    cold_l2_cache=True,
+                    use_cuda_graph=False,
+                )
+            except ValueError as e:
+                logger.warning("CUPTI profiling failed (%s), falling back to cuda events", e)
+                times = bench_gpu_time_with_cuda_event(
+                    fn=fn,
+                    dry_run_iters=warmup,
+                    repeat_iters=iters,
+                    input_args=tuple(args),
+                    cold_l2_cache=True,
+                )
             return statistics.median(times)

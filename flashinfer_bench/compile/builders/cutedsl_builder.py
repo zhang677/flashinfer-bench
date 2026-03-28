@@ -9,11 +9,9 @@ from typing import Callable, ClassVar
 from flashinfer_bench.compile.builder import Builder
 from flashinfer_bench.compile.runnable import Runnable
 from flashinfer_bench.data import Definition, Solution, SupportedLanguages
-
 from .python_builder import PythonBuilder
 
 _original_generate_mlir = None
-
 
 def _generate_mlir_cached(
     self,
@@ -48,6 +46,8 @@ def _generate_mlir_cached(
 def patch_cute_compile_cache() -> None:
     """Patch BaseDSL.generate_mlir to force no_cache=False, enabling MLIR caching."""
     global _original_generate_mlir
+    if _original_generate_mlir is not None:
+        return  # Already patched; avoid double-patching which causes infinite recursion
     from cutlass.base_dsl.dsl import BaseDSL
 
     _original_generate_mlir = BaseDSL.generate_mlir
@@ -84,46 +84,12 @@ class CuteDSLBuilder(PythonBuilder):
 
     @staticmethod
     def is_available() -> bool:
-        """Check if CuTeDSL (CUTLASS) is available in the current environment.
-
-        Returns
-        -------
-        bool
-            True if the cutlass package is installed, False otherwise.
-        """
         return importlib.util.find_spec("cutlass") is not None
 
     def can_build(self, solution: Solution) -> bool:
-        """Check if this builder can build the given solution.
-        The solution should be CuTeDSL source code.
-
-        Parameters
-        ----------
-        solution : Solution
-            Solution to check
-
-        Returns
-        -------
-        bool
-            True if solution language is CuTeDSL
-        """
         return solution.spec.language == SupportedLanguages.CUTEDSL
 
     def _get_cleaner(self, package: str, build_path: Path) -> Callable[[], None]:
-        """Create a cleaner that also unpatches CuTeDSL compile cache.
-
-        Parameters
-        ----------
-        package : str
-            The package name to unload from sys.modules.
-        build_path : Path
-            The directory to delete.
-
-        Returns
-        -------
-        Callable[[], None]
-            A function that performs the cleanup.
-        """
         base_cleaner = super()._get_cleaner(package, build_path)
 
         def cleaner() -> None:
