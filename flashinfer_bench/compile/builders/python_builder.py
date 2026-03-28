@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import shutil
 import sys
 from pathlib import Path
@@ -12,6 +13,88 @@ from flashinfer_bench.compile.builder import Builder, BuildError
 from flashinfer_bench.compile.runnable import Runnable, RunnableMetadata
 from flashinfer_bench.compile.utils import write_sources_to_path
 from flashinfer_bench.data import Definition, Solution, SupportedLanguages
+
+logger = logging.getLogger(__name__)
+
+
+def _solution_uses_cutlass(solution: Solution) -> bool:
+    """Check if solution source code references cutlass/CuTeDSL."""
+    for source_file in solution.sources:
+        if "cutlass" in source_file.content or "cute.compile" in source_file.content:
+            return True
+    return False
+
+
+def _install_cute_compile_cache() -> Callable[[], None] | None:
+    """Patch ``cutlass.cute.compile`` to cache compiled programs.
+
+    During benchmarking, ``run()`` is called ~180 times per workload (3 trials x
+    (10 warmup + 50 iterations)).  Each call to ``cute.compile`` triggers a full
+    recompilation.  This wrapper caches the compiled program keyed on the kernel
+    class, its configuration attributes, and the shapes/dtypes of the inputs so
+    that compilation happens only once per unique configuration.
+
+    Returns a *restore* callable that undoes the monkey-patch, or ``None`` if
+    CuTeDSL is not available.
+    """
+    try:
+        import cutlass.cute as cute  # type: ignore[import-untyped]
+    except ImportError:
+        return None
+
+    # Don't patch if already patched (idempotent)
+    if getattr(cute.compile, "_is_cached", False):
+        return lambda: None
+
+    _original_compile = cute.compile
+    _cache: dict[tuple[str, ...], Any] = {}
+
+    def _cached_compile(kernel: Any, *args: Any, **kwargs: Any) -> Any:
+        import torch
+
+        # Include device in key to prevent cross-device compiled program reuse
+        key_parts: list[str] = [str(torch.cuda.current_device()), type(kernel).__name__]
+        # Kernel config attributes that affect compilation output
+        for attr in ("acc_dtype", "tile_shape_mn", "cluster_shape_mn"):
+            val = getattr(kernel, attr, None)
+            if val is not None:
+                key_parts.append(f"{attr}={val}")
+        for arg in args:
+            if hasattr(arg, "shape") and hasattr(arg, "element_type"):
+                # CuTe tensor descriptor.  Dynamic tensors (via mark_layout_dynamic)
+                # produce compiled programs reusable across dynamic dim sizes, so
+                # use the wrapper's cache_key() which masks dynamic dims with '?'.
+                # For non-dynamic tensors, fall back to concrete shape.
+                wrapper = getattr(arg, "_dltensor_wrapper", None)
+                if wrapper is not None and hasattr(wrapper, "cache_key"):
+                    key_parts.append(f"cute({wrapper.cache_key()},{arg.element_type})")
+                else:
+                    key_parts.append(f"cute({tuple(arg.shape)},{arg.element_type})")
+            elif hasattr(arg, "shape") and hasattr(arg, "dtype"):
+                # torch.Tensor
+                key_parts.append(f"torch({tuple(arg.shape)},{arg.dtype})")
+            # Skip non-tensor args (e.g. stream) – they don't affect compilation
+        key = tuple(key_parts)
+
+        if key not in _cache:
+            _cache[key] = _original_compile(kernel, *args, **kwargs)
+            logger.debug("cute.compile cache MISS – key=%s", key)
+        else:
+            logger.debug("cute.compile cache HIT  – key=%s", key)
+        return _cache[key]
+
+    _cached_compile._is_cached = True  # type: ignore[attr-defined]
+    cute.compile = _cached_compile
+    logger.info(
+        "Installed CuTeDSL compile cache (patched cutlass.cute.compile)"
+    )
+
+    def _restore() -> None:
+        cute.compile = _original_compile
+        _cache.clear()
+        logger.info("Restored original cutlass.cute.compile")
+
+    return _restore
 
 
 class PythonBuilder(Builder):
@@ -125,6 +208,18 @@ class PythonBuilder(Builder):
         except Exception as e:
             cleaner()
             raise BuildError(f"Failed importing module '{module_name}' from sources: {e}") from e
+
+        # Only install CuTeDSL compile cache for solutions that use cutlass.
+        # Avoid importing cutlass for non-CuTeDSL solutions to prevent premature
+        # CUDA initialization that can cause ERROR_NOT_INITIALIZED on other GPUs.
+        if _solution_uses_cutlass(solution):
+            restore_cute = _install_cute_compile_cache()
+            if restore_cute is not None:
+                _original_cleaner = cleaner
+
+                def cleaner() -> None:  # noqa: F811
+                    restore_cute()
+                    _original_cleaner()
 
         try:
             fn: Any = getattr(mod, entry_symbol)
