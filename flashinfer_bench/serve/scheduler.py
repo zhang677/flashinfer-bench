@@ -91,6 +91,10 @@ class _GPUWorkerThread(threading.Thread):
         self._shutdown = shutdown_event
         self._gpu_worker: Optional[PersistentSubprocessWorker] = None
         self._ref_cache: Dict[tuple[str, str], BaselineHandle] = {}
+        # Cached state for thread-safe reads from the HTTP layer.
+        # Only this worker thread writes these; the event loop reads them.
+        self._healthy: bool = True
+        self._busy: bool = False
 
     @property
     def device(self) -> str:
@@ -98,7 +102,12 @@ class _GPUWorkerThread(threading.Thread):
 
     @property
     def is_healthy(self) -> bool:
-        return self._gpu_worker is not None and self._gpu_worker.is_healthy()
+        # Return cached state — never touch the subprocess pipe from outside the worker thread.
+        return self._healthy
+
+    @property
+    def is_busy(self) -> bool:
+        return self._busy
 
     def close(self) -> None:
         if self._gpu_worker:
@@ -110,6 +119,7 @@ class _GPUWorkerThread(threading.Thread):
             self._gpu_worker = PersistentSubprocessWorker(self._device)
         except Exception as e:
             logger.error(f"Failed to start GPU worker on {self._device}: {e}")
+            self._healthy = False
             return
 
         while not self._shutdown.is_set():
@@ -123,19 +133,25 @@ class _GPUWorkerThread(threading.Thread):
                 continue
 
             self._store.mark_running(task_id)
+            self._busy = True
             try:
                 traces = self._evaluate_task(task)
                 self._store.complete_task(task_id, traces)
+                self._healthy = True
             except Exception as e:
                 logger.error(f"Task {task_id} failed on {self._device}: {e}")
                 self._store.fail_task(task_id, str(e))
                 if not self._gpu_worker.is_healthy():
+                    self._healthy = False
                     logger.warning(f"Worker on {self._device} unhealthy, restarting")
                     if self._gpu_worker.restart():
                         self._ref_cache.clear()
+                        self._healthy = True
                     else:
                         logger.error(f"Failed to restart worker on {self._device}, exiting")
                         return
+            finally:
+                self._busy = False
 
     def _evaluate_task(self, task: Task) -> List[Trace]:
         definition = self._trace_set.definitions.get(task.definition_name)

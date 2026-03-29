@@ -45,6 +45,7 @@ class TaskResponse(BaseModel):
     solution: str
     traces: Optional[List[Dict[str, Any]]] = None
     error: Optional[str] = None
+    queue_position: Optional[int] = None
 
 
 class DefinitionInfo(BaseModel):
@@ -60,6 +61,7 @@ class BatchRequest(BaseModel):
 class WorkerInfo(BaseModel):
     device: str
     healthy: bool
+    busy: bool
 
 
 class HealthResponse(BaseModel):
@@ -179,6 +181,7 @@ async def batch_get_tasks(req: BatchRequest):
                 solution=task.solution.name,
                 traces=traces_data,
                 error=task.error,
+                queue_position=sched.task_store.queue_position(tid),
             )
         )
     return results
@@ -193,7 +196,10 @@ async def get_task(task_id: str, timeout: float = Query(default=0, ge=0, le=3600
 @app.get("/health", response_model=HealthResponse)
 async def health():
     sched = _get_scheduler()
-    workers = [WorkerInfo(device=w.device, healthy=w.is_healthy) for w in sched.workers]
+    workers = [
+        WorkerInfo(device=w.device, healthy=w.is_healthy, busy=w.is_busy)
+        for w in sched.workers
+    ]
     return HealthResponse(status="ok", workers=workers, queue_size=sched.queue_size)
 
 

@@ -99,6 +99,20 @@ class TaskStore:
             if tid in self._tasks
         )
 
+    def queue_position(self, task_id: str) -> Optional[int]:
+        """Return 0-based position among pending/running tasks, or None if done."""
+        task = self._tasks.get(task_id)
+        if task is None or task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+            return None
+        # Count tasks that are still waiting and were created before this one.
+        pos = 0
+        for t in self._tasks.values():
+            if t.id == task_id:
+                continue
+            if t.status in (TaskStatus.PENDING, TaskStatus.RUNNING) and t.created_at <= task.created_at:
+                pos += 1
+        return pos
+
     def cleanup(self) -> int:
         """Remove completed tasks older than TTL. Returns count removed."""
         now = time.time()
