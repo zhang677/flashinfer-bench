@@ -277,6 +277,7 @@ def serve(args: argparse.Namespace):
         rtol=args.rtol,
         atol=args.atol,
         timeout_seconds=args.timeout,
+        profile_baseline=args.profile_baseline,
     )
 
     scheduler = Scheduler(trace_set=trace_set, config=config, devices=devices)
@@ -305,6 +306,7 @@ def run(args: argparse.Namespace):
             solutions=args.solutions,
             timeout_seconds=args.timeout,
             required_matched_ratio=args.required_matched_ratio,
+            profile_baseline=args.profile_baseline,
         )
         benchmark = Benchmark(trace_set, config)
         logger.info(f"Running benchmark on FlashInfer Trace Dataset: {Path(path).resolve()}")
@@ -368,6 +370,12 @@ def cli():
     serve_parser.add_argument("--atol", type=float, default=1e-2)
     serve_parser.add_argument("--timeout", type=int, default=300)
     serve_parser.add_argument(
+        "--profile-baseline",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Profile baseline reference implementation for speedup calculation (default: True)",
+    )
+    serve_parser.add_argument(
         "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
     )
     serve_parser.set_defaults(func=serve)
@@ -428,6 +436,12 @@ def cli():
         type=int,
         default=300,
         help="Timeout in seconds for each solution evaluation (default: 300)",
+    )
+    run_parser.add_argument(
+        "--profile-baseline",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Profile baseline reference implementation for speedup calculation (default: True)",
     )
     run_parser.add_argument(
         "--local",
