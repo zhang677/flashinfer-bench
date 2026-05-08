@@ -34,6 +34,9 @@ class EvaluateRequest(BaseModel):
     # Per-request BenchmarkConfig overrides; None means inherit the server-global value.
     profile_baseline: Optional[bool] = None
     run_baseline: Optional[bool] = None
+    # Numerical tolerances; None inherits the server-global BenchmarkConfig value.
+    atol: Optional[float] = None
+    rtol: Optional[float] = None
 
 
 class EvaluateResponse(BaseModel):
@@ -223,6 +226,8 @@ async def evaluate(req: EvaluateRequest):
             req.workload_uuids,
             profile_baseline=req.profile_baseline,
             run_baseline=req.run_baseline,
+            atol=req.atol,
+            rtol=req.rtol,
         )
     except ValueError as e:
         raise HTTPException(400, detail=str(e))

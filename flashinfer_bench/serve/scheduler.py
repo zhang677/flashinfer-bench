@@ -65,13 +65,16 @@ class Scheduler:
         *,
         profile_baseline: Optional[bool] = None,
         run_baseline: Optional[bool] = None,
+        atol: Optional[float] = None,
+        rtol: Optional[float] = None,
     ) -> str:
         """Submit a solution for evaluation. Returns task_id.
 
-        ``profile_baseline`` / ``run_baseline`` override the server-global
-        ``BenchmarkConfig`` for this task only. ``None`` inherits the global value.
-        When ``run_baseline=False``, every selected workload must declare reference
-        outputs in safetensors and use only deterministic (safetensors/scalar) inputs.
+        ``profile_baseline`` / ``run_baseline`` / ``atol`` / ``rtol`` override the
+        server-global ``BenchmarkConfig`` for this task only. ``None`` inherits the
+        global value. When ``run_baseline=False``, every selected workload must
+        declare reference outputs in safetensors and use only deterministic
+        (safetensors/scalar) inputs.
         """
         if run_baseline is False:
             self._validate_run_baseline_false(solution.definition, workload_uuids)
@@ -81,6 +84,8 @@ class Scheduler:
             kind=TaskKind.EVALUATE,
             profile_baseline=profile_baseline,
             run_baseline=run_baseline,
+            atol=atol,
+            rtol=rtol,
         )
         self._queue.put(task_id)
         return task_id
@@ -280,15 +285,23 @@ class _GPUWorkerThread(threading.Thread):
 
         workloads = self._resolve_workloads(task)
 
+        cfg_overrides = {}
+        if task.atol is not None:
+            cfg_overrides["atol"] = task.atol
+        if task.rtol is not None:
+            cfg_overrides["rtol"] = task.rtol
+        task_cfg = self._config.model_copy(update=cfg_overrides) if cfg_overrides else self._config
+
         traces = []
         for workload in workloads:
             ref_handle = self._get_or_build_ref(
                 definition,
                 workload,
+                cfg=task_cfg,
                 profile_baseline=task.profile_baseline,
                 run_baseline=task.run_baseline,
             )
-            evaluation = self._gpu_worker.run_solution(task.solution, ref_handle, self._config)
+            evaluation = self._gpu_worker.run_solution(task.solution, ref_handle, task_cfg)
             trace = Trace(
                 definition=task.definition_name,
                 workload=workload,
@@ -390,6 +403,7 @@ class _GPUWorkerThread(threading.Thread):
         definition: Definition,
         workload: Workload,
         *,
+        cfg: Optional[BenchmarkConfig] = None,
         profile_baseline: Optional[bool] = None,
         run_baseline: Optional[bool] = None,
     ) -> BaselineHandle:
@@ -397,6 +411,8 @@ class _GPUWorkerThread(threading.Thread):
 
         Cache key includes the per-request overrides so requests with different
         ``run_baseline`` / ``profile_baseline`` values do not share baselines.
+        ``atol`` / ``rtol`` are not part of the cache key because they are not
+        used during baseline construction.
         """
         key = (definition.name, workload.uuid, profile_baseline, run_baseline)
         if key in self._ref_cache:
@@ -405,7 +421,7 @@ class _GPUWorkerThread(threading.Thread):
         handle = self._gpu_worker.run_ref(
             definition,
             workload,
-            self._config,
+            cfg if cfg is not None else self._config,
             self._trace_set.root,
             profile_baseline=profile_baseline,
             run_baseline=run_baseline,

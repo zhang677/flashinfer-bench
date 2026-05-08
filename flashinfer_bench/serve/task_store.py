@@ -68,6 +68,9 @@ class Task:
     # Evaluate per-request overrides (None = inherit from server BenchmarkConfig)
     profile_baseline: Optional[bool] = None
     run_baseline: Optional[bool] = None
+    # Numerical tolerances for evaluation (None = inherit from server BenchmarkConfig)
+    atol: Optional[float] = None
+    rtol: Optional[float] = None
 
 
 class TaskStore:
@@ -102,6 +105,8 @@ class TaskStore:
         # Evaluate per-request overrides
         profile_baseline: Optional[bool] = None,
         run_baseline: Optional[bool] = None,
+        atol: Optional[float] = None,
+        rtol: Optional[float] = None,
     ) -> str:
         """Create a task. Returns task_id."""
         task_id = uuid.uuid4().hex
@@ -125,6 +130,8 @@ class TaskStore:
             sanitizer_print_limit=sanitizer_print_limit,
             profile_baseline=profile_baseline,
             run_baseline=run_baseline,
+            atol=atol,
+            rtol=rtol,
         )
         with self._lock:
             self._tasks[task_id] = task
