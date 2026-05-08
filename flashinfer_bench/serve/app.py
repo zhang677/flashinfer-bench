@@ -31,6 +31,9 @@ def _get_scheduler() -> Scheduler:
 class EvaluateRequest(BaseModel):
     solution: Solution
     workload_uuids: Optional[List[str]] = None
+    # Per-request BenchmarkConfig overrides; None means inherit the server-global value.
+    profile_baseline: Optional[bool] = None
+    run_baseline: Optional[bool] = None
 
 
 class EvaluateResponse(BaseModel):
@@ -214,7 +217,15 @@ async def evaluate(req: EvaluateRequest):
     if req.solution.definition not in sched.trace_set.definitions:
         raise HTTPException(400, detail=f"Definition not found: {req.solution.definition}")
     renamed = req.solution.with_unique_name()
-    task_id = sched.submit_evaluate(renamed, req.workload_uuids)
+    try:
+        task_id = sched.submit_evaluate(
+            renamed,
+            req.workload_uuids,
+            profile_baseline=req.profile_baseline,
+            run_baseline=req.run_baseline,
+        )
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
     return EvaluateResponse(task_id=task_id, normalized_solution_name=renamed.name)
 
 

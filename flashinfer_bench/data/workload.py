@@ -1,6 +1,6 @@
 """Specification for workloads, which defines the input tensors for a kernel."""
 
-from typing import Dict, Literal, Union
+from typing import Dict, Literal, Optional, Union
 
 from .utils import BaseModelWithDocstrings, NonEmptyString, NonNegativeInt
 
@@ -64,3 +64,7 @@ class Workload(BaseModelWithDocstrings):
     """Dictionary mapping input names to their data specifications."""
     uuid: NonEmptyString
     """Unique identifier for this specific workload configuration."""
+    outputs: Optional[Dict[str, SafetensorsInput]] = None
+    """Optional dictionary mapping output names to safetensors specifications. When provided,
+    these stored reference outputs can be used in place of running the live baseline (selected
+    via the per-request ``run_baseline=False`` flag on ``/evaluate``)."""

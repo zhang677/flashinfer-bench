@@ -65,6 +65,10 @@ class Task:
     sanitizer_max_lines: Optional[int] = None
     sanitizer_print_limit: Optional[int] = None
 
+    # Evaluate per-request overrides (None = inherit from server BenchmarkConfig)
+    profile_baseline: Optional[bool] = None
+    run_baseline: Optional[bool] = None
+
 
 class TaskStore:
     """Thread-safe task storage with TTL-based cleanup."""
@@ -95,6 +99,9 @@ class TaskStore:
         sanitizer_timeout: int = 300,
         sanitizer_max_lines: Optional[int] = None,
         sanitizer_print_limit: Optional[int] = None,
+        # Evaluate per-request overrides
+        profile_baseline: Optional[bool] = None,
+        run_baseline: Optional[bool] = None,
     ) -> str:
         """Create a task. Returns task_id."""
         task_id = uuid.uuid4().hex
@@ -116,6 +123,8 @@ class TaskStore:
             sanitizer_timeout=sanitizer_timeout,
             sanitizer_max_lines=sanitizer_max_lines,
             sanitizer_print_limit=sanitizer_print_limit,
+            profile_baseline=profile_baseline,
+            run_baseline=run_baseline,
         )
         with self._lock:
             self._tasks[task_id] = task

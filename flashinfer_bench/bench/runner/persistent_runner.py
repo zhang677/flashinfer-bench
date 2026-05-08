@@ -250,9 +250,14 @@ class PersistentSubprocessWorker:
         workload: Workload,
         cfg: BenchmarkConfig,
         trace_set_root: Optional[Path] = None,
+        *,
+        profile_baseline: Optional[bool] = None,
+        run_baseline: Optional[bool] = None,
     ) -> BaselineHandle:
         evaluator_cls = resolve_evaluator(definition)
-        eval_cfg = cfg.resolve_eval_config(definition)
+        eval_cfg = cfg.resolve_eval_config(
+            definition, profile_baseline=profile_baseline, run_baseline=run_baseline
+        )
         baseline = evaluator_cls.build_baseline(
             definition=definition,
             workload=workload,

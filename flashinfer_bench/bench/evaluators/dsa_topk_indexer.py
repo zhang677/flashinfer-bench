@@ -14,7 +14,12 @@ from typing_extensions import override
 from flashinfer_bench.bench.config import ResolvedEvalConfig
 from flashinfer_bench.bench.runner.runner import BaselineHandle, DeviceBaseline
 from flashinfer_bench.bench.timing import time_runnable
-from flashinfer_bench.bench.utils import gen_inputs, load_safetensors, make_eval
+from flashinfer_bench.bench.utils import (
+    gen_inputs,
+    load_safetensors,
+    load_safetensors_outputs,
+    make_eval,
+)
 from flashinfer_bench.compile import BuilderRegistry, Runnable
 from flashinfer_bench.data import Correctness, Definition, Evaluation, EvaluationStatus, Workload
 
@@ -217,7 +222,6 @@ class DsaTopkIndexerEvaluator(DefaultEvaluator):
         device: str,
         trace_set_root: Optional[Path] = None,
     ) -> DeviceBaseline:
-        ref_runnable = BuilderRegistry.get_instance().build_reference(definition)
         loaded_safe_tensors = (
             load_safetensors(definition, workload, trace_set_root)
             if any(d.type == "safetensors" for d in workload.inputs.values())
@@ -236,6 +240,36 @@ class DsaTopkIndexerEvaluator(DefaultEvaluator):
         inputs: List[List[Any]] = []
         outputs: List[List[torch.Tensor]] = []
         dev = torch.device(device)
+
+        if not cfg.run_baseline:
+            stored_outputs_cpu = load_safetensors_outputs(definition, workload, trace_set_root)
+            stored_outputs = [
+                stored_outputs_cpu[name].to(device=dev) for name in definition.outputs.keys()
+            ]
+            for _ in range(cfg.num_trials):
+                inp = gen_inputs(
+                    definition, workload, device=device, safe_tensors=loaded_safe_tensors
+                )
+                if k_cache_is_random:
+                    num_pages = inp[k_cache_idx].shape[0]
+                    k_bf16 = torch.randn(
+                        num_pages, page_size, 1, head_dim, dtype=torch.bfloat16, device=dev
+                    )
+                    inp[k_cache_idx] = _pack_fp8_k_cache(k_bf16, page_size, head_dim)
+                inputs.append(inp)
+                outputs.append([t.clone() for t in stored_outputs])
+
+            handle = BaselineHandle(uuid_mod.uuid4().hex)
+            return DeviceBaseline(
+                handle=handle,
+                definition=definition,
+                device=device,
+                inputs=inputs,
+                outputs=outputs,
+                mean_latency_ms=0.0,
+            )
+
+        ref_runnable = BuilderRegistry.get_instance().build_reference(definition)
 
         for _ in range(cfg.num_trials):
             inp = gen_inputs(definition, workload, device=device, safe_tensors=loaded_safe_tensors)

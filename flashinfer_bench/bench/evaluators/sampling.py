@@ -16,6 +16,7 @@ from flashinfer_bench.bench.utils import (
     compute_error_stats,
     gen_inputs,
     load_safetensors,
+    load_safetensors_outputs,
     make_eval,
 )
 from flashinfer_bench.compile import BuilderRegistry, Runnable
@@ -60,7 +61,6 @@ class SamplingEvaluator(DefaultEvaluator):
         device: str,
         trace_set_root: Optional[Path] = None,
     ) -> DeviceBaseline:
-        ref_runnable = BuilderRegistry.get_instance().build_reference(definition)
         loaded_safe_tensors = (
             load_safetensors(definition, workload, trace_set_root)
             if any(d.type == "safetensors" for d in workload.inputs.values())
@@ -72,6 +72,26 @@ class SamplingEvaluator(DefaultEvaluator):
 
         inp = gen_inputs(definition, workload, device=device, safe_tensors=loaded_safe_tensors)
         inputs.append(inp)
+
+        if not cfg.run_baseline:
+            stored_outputs_cpu = load_safetensors_outputs(definition, workload, trace_set_root)
+            dev = torch.device(device)
+            expected_probs = stored_outputs_cpu[next(iter(definition.outputs.keys()))].to(
+                device=dev
+            )
+            outputs.append([expected_probs])
+
+            handle = BaselineHandle(uuid.uuid4().hex)
+            return DeviceBaseline(
+                handle=handle,
+                definition=definition,
+                device=device,
+                inputs=inputs,
+                outputs=outputs,
+                mean_latency_ms=0.0,
+            )
+
+        ref_runnable = BuilderRegistry.get_instance().build_reference(definition)
 
         thresholding_method = _detect_thresholding_method(definition)
         probs = _get_input_by_name(definition, inp, "probs")

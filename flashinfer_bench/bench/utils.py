@@ -256,6 +256,59 @@ def load_safetensors(
     return safe_tensors
 
 
+def load_safetensors_outputs(
+    definition: Definition, workload: Workload, trace_set_root: Optional[Path] = None
+) -> Dict[str, torch.Tensor]:
+    """Load reference outputs declared in ``workload.outputs``.
+
+    Mirrors :func:`load_safetensors` but reads from ``workload.outputs`` and
+    validates against ``definition.outputs`` shapes/dtypes. Tensors are
+    returned on CPU; callers move them to the target device.
+    """
+    if not workload.outputs:
+        raise ValueError(
+            f"Workload '{workload.uuid}' has no `outputs` field; cannot load reference outputs"
+        )
+
+    shapes_list = definition.get_output_shapes(workload.axes)
+    output_names = list(definition.outputs.keys())
+    expected = dict(zip(output_names, shapes_list))
+
+    safe_tensors: Dict[str, torch.Tensor] = {}
+    for name, spec in workload.outputs.items():
+        if name not in definition.outputs:
+            raise ValueError(
+                f"Workload '{workload.uuid}' declares output '{name}' which is not in "
+                f"definition '{definition.name}'"
+            )
+
+        path = spec.path
+        if trace_set_root is not None and not Path(path).is_absolute():
+            path = str(trace_set_root / path)
+
+        _ensure_lfs_downloaded(
+            Path(path), trace_set_root, tensor_name=name, workload_id=workload.uuid
+        )
+        tensors = st.load_file(path)
+        if spec.tensor_key not in tensors:
+            raise ValueError(f"Missing key '{spec.tensor_key}' in '{path}'")
+        t = tensors[spec.tensor_key]
+
+        if list(t.shape) != expected[name]:
+            raise ValueError(f"output '{name}' expected {expected[name]}, got {list(t.shape)}")
+        expect_dtype = dtype_str_to_torch_dtype(definition.outputs[name].dtype)
+        if t.dtype != expect_dtype:
+            raise ValueError(f"output '{name}' expected {expect_dtype}, got {t.dtype}")
+
+        safe_tensors[name] = t.contiguous()
+
+    missing = [n for n in definition.outputs.keys() if n not in safe_tensors]
+    if missing:
+        raise ValueError(f"Workload '{workload.uuid}' is missing reference outputs for: {missing}")
+
+    return safe_tensors
+
+
 def gen_inputs(
     definition: Definition,
     workload: Workload,

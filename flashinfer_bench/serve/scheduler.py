@@ -59,12 +59,59 @@ class Scheduler:
         return self._workers
 
     def submit_evaluate(
-        self, solution: Solution, workload_uuids: Optional[List[str]] = None
+        self,
+        solution: Solution,
+        workload_uuids: Optional[List[str]] = None,
+        *,
+        profile_baseline: Optional[bool] = None,
+        run_baseline: Optional[bool] = None,
     ) -> str:
-        """Submit a solution for evaluation. Returns task_id."""
-        task_id = self._task_store.create_task(solution, workload_uuids, kind=TaskKind.EVALUATE)
+        """Submit a solution for evaluation. Returns task_id.
+
+        ``profile_baseline`` / ``run_baseline`` override the server-global
+        ``BenchmarkConfig`` for this task only. ``None`` inherits the global value.
+        When ``run_baseline=False``, every selected workload must declare reference
+        outputs in safetensors and use only deterministic (safetensors/scalar) inputs.
+        """
+        if run_baseline is False:
+            self._validate_run_baseline_false(solution.definition, workload_uuids)
+        task_id = self._task_store.create_task(
+            solution,
+            workload_uuids,
+            kind=TaskKind.EVALUATE,
+            profile_baseline=profile_baseline,
+            run_baseline=run_baseline,
+        )
         self._queue.put(task_id)
         return task_id
+
+    def _validate_run_baseline_false(
+        self, definition_name: str, workload_uuids: Optional[List[str]]
+    ) -> None:
+        """Raise ValueError if any selected workload is incompatible with run_baseline=False."""
+        traces = self._trace_set.workloads.get(definition_name, [])
+        if workload_uuids:
+            uuid_set = set(workload_uuids)
+            traces = [t for t in traces if t.workload.uuid in uuid_set]
+        if not traces:
+            return  # _evaluate_task will surface the "no workloads" failure
+
+        for tr in traces:
+            wl = tr.workload
+            if not wl.outputs:
+                raise ValueError(
+                    f"Workload '{wl.uuid}' has no `outputs`; required when run_baseline=False"
+                )
+            bad_inputs = [
+                name
+                for name, spec in wl.inputs.items()
+                if spec.type not in ("safetensors", "scalar")
+            ]
+            if bad_inputs:
+                raise ValueError(
+                    f"Workload '{wl.uuid}' has non-deterministic inputs {bad_inputs}; "
+                    "run_baseline=False requires all inputs to be safetensors or scalar"
+                )
 
     def submit_profile(
         self,
@@ -158,7 +205,7 @@ class _GPUWorkerThread(threading.Thread):
         self._config = config
         self._shutdown = shutdown_event
         self._gpu_worker: Optional[PersistentSubprocessWorker] = None
-        self._ref_cache: Dict[tuple[str, str], BaselineHandle] = {}
+        self._ref_cache: Dict[tuple[str, str, Optional[bool], Optional[bool]], BaselineHandle] = {}
 
     @property
     def device(self) -> str:
@@ -235,7 +282,12 @@ class _GPUWorkerThread(threading.Thread):
 
         traces = []
         for workload in workloads:
-            ref_handle = self._get_or_build_ref(definition, workload)
+            ref_handle = self._get_or_build_ref(
+                definition,
+                workload,
+                profile_baseline=task.profile_baseline,
+                run_baseline=task.run_baseline,
+            )
             evaluation = self._gpu_worker.run_solution(task.solution, ref_handle, self._config)
             trace = Trace(
                 definition=task.definition_name,
@@ -333,12 +385,30 @@ class _GPUWorkerThread(threading.Thread):
 
         return logs
 
-    def _get_or_build_ref(self, definition: Definition, workload: Workload) -> BaselineHandle:
-        """Get cached reference or build a new one."""
-        key = (definition.name, workload.uuid)
+    def _get_or_build_ref(
+        self,
+        definition: Definition,
+        workload: Workload,
+        *,
+        profile_baseline: Optional[bool] = None,
+        run_baseline: Optional[bool] = None,
+    ) -> BaselineHandle:
+        """Get cached reference or build a new one.
+
+        Cache key includes the per-request overrides so requests with different
+        ``run_baseline`` / ``profile_baseline`` values do not share baselines.
+        """
+        key = (definition.name, workload.uuid, profile_baseline, run_baseline)
         if key in self._ref_cache:
             return self._ref_cache[key]
 
-        handle = self._gpu_worker.run_ref(definition, workload, self._config, self._trace_set.root)
+        handle = self._gpu_worker.run_ref(
+            definition,
+            workload,
+            self._config,
+            self._trace_set.root,
+            profile_baseline=profile_baseline,
+            run_baseline=run_baseline,
+        )
         self._ref_cache[key] = handle
         return handle

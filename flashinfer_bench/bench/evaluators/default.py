@@ -16,6 +16,7 @@ from flashinfer_bench.bench.utils import (
     compute_error_stats,
     gen_inputs,
     load_safetensors,
+    load_safetensors_outputs,
     make_eval,
 )
 from flashinfer_bench.compile import BuilderRegistry, Runnable
@@ -45,8 +46,6 @@ class DefaultEvaluator(Evaluator):
         device: str,
         trace_set_root: Optional[Path] = None,
     ) -> DeviceBaseline:
-        # Reference is always value-returning style
-        ref_runnable = BuilderRegistry.get_instance().build_reference(definition)
         loaded_safe_tensors = (
             load_safetensors(definition, workload, trace_set_root)
             if any(d.type == "safetensors" for d in workload.inputs.values())
@@ -55,6 +54,32 @@ class DefaultEvaluator(Evaluator):
 
         inputs: List[List[Any]] = []
         outputs: List[List[torch.Tensor]] = []
+
+        if not cfg.run_baseline:
+            stored_outputs_cpu = load_safetensors_outputs(definition, workload, trace_set_root)
+            dev = torch.device(device)
+            stored_outputs = [
+                stored_outputs_cpu[name].to(device=dev) for name in definition.outputs.keys()
+            ]
+            for _ in range(cfg.num_trials):
+                inp = gen_inputs(
+                    definition, workload, device=device, safe_tensors=loaded_safe_tensors
+                )
+                inputs.append(inp)
+                outputs.append([t.clone() for t in stored_outputs])
+
+            handle = BaselineHandle(uuid.uuid4().hex)
+            return DeviceBaseline(
+                handle=handle,
+                definition=definition,
+                device=device,
+                inputs=inputs,
+                outputs=outputs,
+                mean_latency_ms=0.0,
+            )
+
+        # Reference is always value-returning style
+        ref_runnable = BuilderRegistry.get_instance().build_reference(definition)
 
         for _ in range(cfg.num_trials):
             inp = gen_inputs(definition, workload, device=device, safe_tensors=loaded_safe_tensors)

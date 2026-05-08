@@ -46,6 +46,9 @@ class ResolvedEvalConfig(BaseModel):
     """Minimum fraction of elements that must be within tolerance."""
     profile_baseline: bool = True
     """Whether to profile the reference implementation for baseline latency."""
+    run_baseline: bool = True
+    """Whether to run the reference implementation live. If False, reference outputs are
+    loaded from ``workload.outputs`` (safetensors) and the live baseline is skipped."""
     extra: Dict[str, Any] = Field(default_factory=dict)
     """Evaluator-specific parameters after all config layers have been merged."""
 
@@ -121,8 +124,20 @@ class BenchmarkConfig(BaseModel):
             return cls.from_yaml(str(yaml_path), **overrides)
         return cls(**overrides)
 
-    def resolve_eval_config(self, definition: Any) -> ResolvedEvalConfig:
-        """Merge: per-def defaults -> op_type_config -> definition_config."""
+    def resolve_eval_config(
+        self,
+        definition: Any,
+        *,
+        profile_baseline: Optional[bool] = None,
+        run_baseline: Optional[bool] = None,
+    ) -> ResolvedEvalConfig:
+        """Merge: per-def defaults -> op_type_config -> definition_config.
+
+        Optional ``profile_baseline`` / ``run_baseline`` overrides take precedence over
+        the global config; ``None`` means "use the global config value". When
+        ``run_baseline`` resolves to ``False``, ``profile_baseline`` is forced to
+        ``False`` since there is no live baseline to profile.
+        """
         merged = {
             "warmup_runs": self.warmup_runs,
             "iterations": self.iterations,
@@ -131,6 +146,7 @@ class BenchmarkConfig(BaseModel):
             "atol": self.atol,
             "required_matched_ratio": self.required_matched_ratio,
             "profile_baseline": self.profile_baseline,
+            "run_baseline": True,
             "extra": {
                 "sampling_validation_trials": self.sampling_validation_trials,
                 "sampling_tvd_threshold": self.sampling_tvd_threshold,
@@ -151,5 +167,12 @@ class BenchmarkConfig(BaseModel):
             merged.update(updates)
             if layer.extra:
                 merged["extra"].update(layer.extra)
+
+        if profile_baseline is not None:
+            merged["profile_baseline"] = profile_baseline
+        if run_baseline is not None:
+            merged["run_baseline"] = run_baseline
+        if not merged["run_baseline"]:
+            merged["profile_baseline"] = False
 
         return ResolvedEvalConfig(**merged)
