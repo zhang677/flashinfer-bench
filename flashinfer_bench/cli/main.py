@@ -260,14 +260,21 @@ def serve(args: argparse.Namespace):
     if not devices:
         raise RuntimeError("No CUDA devices available")
 
-    config = BenchmarkConfig(
-        warmup_runs=args.warmup_runs,
-        iterations=args.iterations,
-        num_trials=args.num_trials,
-        rtol=args.rtol,
-        atol=args.atol,
-        timeout_seconds=args.timeout,
-    )
+    raw_cli_overrides = {
+        "warmup_runs": args.warmup_runs,
+        "iterations": args.iterations,
+        "num_trials": args.num_trials,
+        "rtol": args.rtol,
+        "atol": args.atol,
+        "required_matched_ratio": args.required_matched_ratio,
+        "timeout_seconds": args.timeout,
+    }
+    cli_overrides = {k: v for k, v in raw_cli_overrides.items() if v is not None}
+    config_path = getattr(args, "config", None)
+    if config_path:
+        config = BenchmarkConfig.from_yaml(config_path, **cli_overrides)
+    else:
+        config = BenchmarkConfig.default(**cli_overrides)
 
     scheduler = Scheduler(trace_set=trace_set, config=config, devices=devices)
     app = init_app(scheduler)
@@ -358,12 +365,24 @@ def cli():
     )
     serve_parser.add_argument("--host", type=str, default="0.0.0.0", help="Server host")
     serve_parser.add_argument("--port", type=int, default=8000, help="Server port")
-    serve_parser.add_argument("--warmup-runs", type=int, default=10)
-    serve_parser.add_argument("--iterations", type=int, default=50)
-    serve_parser.add_argument("--num-trials", type=int, default=3)
-    serve_parser.add_argument("--rtol", type=float, default=1e-2)
-    serve_parser.add_argument("--atol", type=float, default=1e-2)
-    serve_parser.add_argument("--timeout", type=int, default=300)
+    serve_parser.add_argument("--warmup-runs", type=int, default=None)
+    serve_parser.add_argument("--iterations", type=int, default=None)
+    serve_parser.add_argument("--num-trials", type=int, default=None)
+    serve_parser.add_argument("--rtol", type=float, default=None)
+    serve_parser.add_argument("--atol", type=float, default=None)
+    serve_parser.add_argument(
+        "--required-matched-ratio",
+        type=float,
+        default=None,
+        help="Required ratio of elements within tolerance. Overrides evaluator default (0.95 for low-bit).",
+    )
+    serve_parser.add_argument("--timeout", type=int, default=None)
+    serve_parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to benchmark config YAML file. Overrides default eval config.",
+    )
     serve_parser.add_argument(
         "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
     )
