@@ -1,0 +1,6 @@
+rtol: 1e-2
+atol: 1e-2
+
+definition_config:
+  fp8_gemm_nt_1d2d_n4096_k7168:
+    required_matched_ratio: 0.999
