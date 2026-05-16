@@ -79,11 +79,23 @@ class LowBitEvaluator(DefaultEvaluator):
                         status=EvaluationStatus.INCORRECT_DTYPE, device=device, log_path=log_path
                     )
 
+                # torch.isinf / torch.isnan are not implemented for some
+                # low-bit dtypes (e.g. float8_e4m3fn); skip the individual
+                # check that raises NotImplementedError rather than failing.
                 non_finite_err_val: Optional[float] = None
-                if torch.isinf(sol_tensor).any().item():
+                try:
+                    has_inf = torch.isinf(sol_tensor).any().item()
+                except NotImplementedError:
+                    has_inf = False
+                if has_inf:
                     non_finite_err_val = float("inf")
-                elif torch.isnan(sol_tensor).any().item():
-                    non_finite_err_val = float("nan")
+                else:
+                    try:
+                        has_nan = torch.isnan(sol_tensor).any().item()
+                    except NotImplementedError:
+                        has_nan = False
+                    if has_nan:
+                        non_finite_err_val = float("nan")
 
                 if non_finite_err_val is not None:
                     correctness = Correctness(
